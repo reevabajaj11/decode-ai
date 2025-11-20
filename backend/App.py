@@ -1,156 +1,179 @@
-# app.py
-import time
+# app.py (UPDATED WITH URL SUPPORT)
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import google.generativeai as genai
 import os
 import json
-import re # Import the regular expression module
-import fitz # PyMuPDF
+import re
+import fitz  # PyMuPDF
+import requests
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-# Load environment variables from a .env file
+# Load environment variables
 load_dotenv()
 
-# --- Boilerplate Setup ---
+# --- App Setup ---
 app = Flask(__name__)
-CORS(app) 
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Configure the Gemini API client
+# --- Configure the Gemini API ---
 API_KEY = os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
-    raise ValueError("GOOGLE_API_KEY environment variable not set. Please set it in a .env file.")
+    raise ValueError("GOOGLE_API_KEY environment variable not set.")
 genai.configure(api_key=API_KEY)
+model = genai.GenerativeModel('models/gemini-flash-latest')
 
-# Define the model to use
-model = genai.GenerativeModel('gemini-1.5-flash')
-
-# --- Helper Function for Robust JSON Parsing ---
+# --- Helper Functions ---
 def extract_and_parse_json(text):
-    """
-    Extracts a JSON object from a string that may contain extra text,
-    and returns a Python dictionary.
-    """
-    # Use a regex to find a JSON block starting with { and ending with }
     match = re.search(r'\{.*\}', text, re.DOTALL)
-    
     if match:
         json_string = match.group(0)
         try:
             return json.loads(json_string)
         except json.JSONDecodeError as e:
-            print(f"Failed to decode JSON: {e}")
-            print(f"Problematic JSON string: {json_string}")
-            return None # Return None if parsing fails
-    else:
-        print("No JSON object found in the text.")
-        return None
+            print(f"JSON Decode Error: {e}")
+            return None
+    return None
 
-# --- THE REAL API ENDPOINT ---
-@app.route("/analyzeDocument", methods=['POST'])
-def analyze_document():
-    
-    print("File received! Analyzing document with Gemini AI...")
-    
-    # 1. Get the uploaded file
-    if 'document' not in request.files:
-        return jsonify({"error": "No document part in the request"}), 400
-    
-    file = request.files['document']
-    
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    
-    # 2. Extract text based on file type
+def extract_text_from_file(file):
     filename = file.filename
-    document_content = ""
-    
     if filename.endswith('.pdf'):
         try:
-            print("Attempting to extract text from PDF...")
             doc = fitz.open(stream=file.read(), filetype="pdf")
-            for page in doc:
-                document_content += page.get_text()
+            text = "".join(page.get_text() for page in doc)
             doc.close()
-            print("PDF text extraction successful.")
+            return text
         except Exception as e:
-            print(f"Error extracting text from PDF: {e}")
-            return jsonify({"error": "Could not read the PDF file."}), 400
-            
-    elif filename.endswith('.txt'):
-        document_content = file.read().decode('utf-8', errors='ignore')
-    
-    else:
-        return jsonify({"error": "Unsupported file type. Please upload a PDF or TXT file."}), 400
+            print(f"Error reading PDF: {e}")
+            return None
+    # Handle .txt or blob uploads (Paste Text often has no extension)
+    return file.read().decode('utf-8', errors='ignore')
 
-    if not document_content.strip():
-        return jsonify({"error": "The file is empty or contains no readable text."}), 400
-
-    # 3. Craft the Gemini API prompt
-    system_prompt = """
-    You are a legal document analysis bot. Your task is to provide a detailed, plain-English analysis of a legal document, such as a rental agreement or a contract.
-
-Follow these strict instructions for your output:
-- **SUMMARY**: Write a comprehensive paragraph that outlines the document's main purpose, key parties involved, and the most important terms and conditions. Be specific and include any numbers or percentages mentioned.
-
-- **RISK FLAGS**: Identify any clauses that are highly unusual, disadvantageous to the user, or represent a significant commitment.
-    - **Red Flags**: Clauses that are highly unfavorable or risky.
-    - **Yellow Flags**: Clauses that are standard but should be carefully reviewed.
-    - For each flag, provide a clear title and a simple explanation of why it is a risk.
-
-- **KEY CLAUSES**: Choose the most important 3-5 clauses from the document.
-    - **Original Text**: Extract the exact legal text for each key clause.
-    - **Simplified Text**: Rewrite each clause in simple, easy-to-understand language. Do not use legal jargon. The goal is clarity for a layperson.
-
-Provide the entire output as a single, valid JSON object, adhering strictly to the following schema. Do not include any other text, markdown, or commentary outside of the JSON object.
-
-JSON Structure:
-{
-  "summary": "<The comprehensive summary you created.>",
-  "riskFlags": [
-    {
-      "level": "<'Red' or 'Yellow'>",
-      "title": "<A concise title for the risk.>",
-      "explanation": "<A plain-English explanation.>"
-    }
-  ],
-  "keyClauses": [
-    {
-      "title": "<A simple, descriptive title for the clause.>",
-      "originalText": "<The exact, original legal text of the clause.>",
-      "simplifiedText": "<A plain-English summary of the clause's meaning.>"
-    }
-  ]
-}
-
-Analyze the legal document and return the analysis in the JSON format above.
-    """
-    
-    prompt_parts = [system_prompt, f"Analyze the following legal document:\n\n{document_content}"]
-
+def extract_text_from_url(url):
     try:
-        # 4. Call the Gemini API
-        response = model.generate_content(prompt_parts)
+        # User-Agent header makes us look like a real browser, not a bot
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
         
-        # 5. Extract and parse the JSON output from the raw text
-        raw_response_text = response.text
+        content_type = response.headers.get('Content-Type', '').lower()
         
-        print(f"\n--- Raw API Response Start ---\n{raw_response_text}\n--- Raw API Response End ---\n")
+        # 1. Handle PDF URLs
+        if 'application/pdf' in content_type or url.lower().endswith('.pdf'):
+            with fitz.open(stream=response.content, filetype="pdf") as doc:
+                text = "".join(page.get_text() for page in doc)
+            return text
+            
+        # 2. Handle Standard Websites (HTML)
+        soup = BeautifulSoup(response.content, 'html.parser')
         
-        analysis_dict = extract_and_parse_json(raw_response_text)
+        # Remove junk elements (scripts, styles, navbars, footers)
+        for script in soup(["script", "style", "nav", "footer", "header", "meta", "noscript"]):
+            script.decompose()
+            
+        text = soup.get_text(separator='\n')
         
-        if analysis_dict:
-            print("Analysis complete. Sending data to frontend.")
-            return jsonify(analysis_dict)
-        else:
-            return jsonify({"error": "Failed to parse API response. Please check the terminal."}), 500
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        clean_text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        return clean_text
 
     except Exception as e:
-        print(f"Error during Gemini API call: {e}")
-        return jsonify({
-            "error": "Failed to analyze document. Please check the document format or try again."
-        }), 500
+        print(f"Error fetching URL: {e}")
+        return None
 
-# --- Start the Server ---
+def get_gemini_analysis(document_content):
+    """Shared function to call Gemini API"""
+    system_prompt = """
+    You are a legal document analysis bot. Analyze the provided document and return a single, valid JSON object.
+    
+    JSON Structure:
+    {
+      "summary": "<Comprehensive summary of the document>",
+      "riskFlags": [
+        { "level": "<'Red' or 'Yellow'>", "title": "<Risk Title>", "explanation": "<Risk Explanation>" }
+      ],
+      "keyClauses": [
+        { "title": "<Clause Title>", "originalText": "<Original Clause Text>", "simplifiedText": "<Simplified Explanation>" }
+      ]
+    }
+    """
+    try:
+        response = model.generate_content([system_prompt, f"Analyze this document:\n\n{document_content}"])
+        analysis_dict = extract_and_parse_json(response.text)
+        if analysis_dict:
+            analysis_dict['fullDocumentText'] = document_content
+            return analysis_dict
+        return None
+    except Exception as e:
+        print(f"Error during Gemini API call: {e}")
+        return None
+
+# --- API Endpoint: File Upload ---
+@app.route("/analyzeDocument", methods=['POST'])
+def analyze_document():
+    if 'document' not in request.files:
+        return jsonify({"error": "No document part"}), 400
+    file = request.files['document']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    document_content = extract_text_from_file(file)
+    if not document_content:
+        return jsonify({"error": "Could not extract text."}), 400
+
+    result = get_gemini_analysis(document_content)
+    if result:
+        return jsonify(result)
+    return jsonify({"error": "Analysis failed."}), 500
+
+# --- API Endpoint: URL Analysis (NEW) ---
+@app.route("/analyzeUrl", methods=['POST'])
+def analyze_url():
+    data = request.get_json()
+    if not data or 'url' not in data:
+        return jsonify({"error": "Missing URL"}), 400
+    
+    url = data['url']
+    print(f"Processing URL: {url}") # Debug log
+    
+    document_content = extract_text_from_url(url)
+    if not document_content:
+        return jsonify({"error": "Could not fetch text from URL. It might be blocked or invalid."}), 400
+        
+    result = get_gemini_analysis(document_content)
+    if result:
+        return jsonify(result)
+    return jsonify({"error": "Analysis failed."}), 500
+
+# --- API Endpoint: Q&A ---
+@app.route("/askQuestion", methods=['POST'])
+def ask_question():
+    data = request.get_json()
+    if not data or 'question' not in data or 'context' not in data:
+        return jsonify({"error": "Missing question or context"}), 400
+
+    question = data['question']
+    document_context = data['context']
+
+    prompt = f"""
+    Based ONLY on the document text provided below, answer the user's question in a simple and direct way. 
+    If the answer is not in the document, say "I'm sorry, I cannot find the answer to that in this document."
+    ---
+    DOCUMENT TEXT: {document_context}
+    ---
+    USER'S QUESTION: "{question}"
+    """
+    try:
+        response = model.generate_content(prompt)
+        return jsonify({"answer": response.text})
+    except Exception as e:
+        print(f"Error during Q&A API call: {e}")
+        return jsonify({"error": "Failed to get an answer."}), 500
+
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
