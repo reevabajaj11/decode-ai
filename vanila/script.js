@@ -67,7 +67,7 @@ function showLoadingState() {
 }
 
 function sendToBackend(formData) {
-    const backendApiUrl = 'http://localhost:5000/analyzeDocument';
+    const backendApiUrl = 'https://legaleaseai-backend-gt37.onrender.com/analyzeDocument';
     fetch(backendApiUrl, {
         method: 'POST',
         body: formData
@@ -154,7 +154,7 @@ function showUrlModal() {
         // 3. Send to Backend
         sessionStorage.setItem('documentName', url); // Use URL as the document name
 
-        fetch('http://localhost:5000/analyzeUrl', {
+        fetch('https://legaleaseai-backend-gt37.onrender.com/analyzeUrl', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -282,7 +282,7 @@ function initializeDashboardUI() {
         const documentText = sessionStorage.getItem('fullDocumentText');
 
         // Send the question and context to backend 
-        fetch('http://localhost:5000/askQuestion', {
+        fetch('https://legaleaseai-backend-gt37.onrender.com/askQuestion', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
