@@ -1,7 +1,8 @@
 # Python
-venv/
+.venv/
 __pycache__/
 *.pyc
+.vscode/
 
 # Environment
 .env
@@ -10,3 +11,6 @@ __pycache__/
 *check_models.py
 *login.html
 *approach.png
+
+#Folders
+

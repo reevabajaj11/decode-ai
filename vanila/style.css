@@ -280,6 +280,11 @@ body {
     line-height: 1;
 }
 
+logo-text h1:hover{
+    color: hsl(var(--primary));
+
+}
+
 .logo-text p {
     font-size: 0.75rem;
     color: hsl(var(--muted-foreground));
