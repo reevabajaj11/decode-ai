@@ -1,0 +1,8 @@
+flask
+flask-cors
+google-generativeai
+python-dotenv
+pymupdf
+requests
+beautifulsoup4
+gunicorn
